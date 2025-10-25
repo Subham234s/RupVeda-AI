@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { FAQ_DATA } from '../constants';
 
@@ -18,18 +17,83 @@ const FaqItem: React.FC<{ item: { question: string; answer: string; }; isOpen: b
 
 export const ContactPage: React.FC = () => {
     const [openFaq, setOpenFaq] = useState<number | null>(null);
+    const [formState, setFormState] = useState({
+        name: '',
+        email: '',
+        subject: '',
+        message: '',
+        consent: false,
+    });
+    const [attachment, setAttachment] = useState<File | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [responseMessage, setResponseMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
     
     const handleFaqClick = (index: number) => {
         setOpenFaq(openFaq === index ? null : index);
     };
 
-    const handleFormSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        // Here you would typically handle form submission, e.g., send to a backend.
-        // For this example, we'll just show an alert.
-        alert('Thank you for your message! We will get back to you soon.');
-        (e.target as HTMLFormElement).reset();
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        if (e.target.type === 'checkbox') {
+            const { checked } = e.target as HTMLInputElement;
+            setFormState(prev => ({ ...prev, [name]: checked }));
+        } else {
+            setFormState(prev => ({ ...prev, [name]: value }));
+        }
     };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            setAttachment(e.target.files[0]);
+        } else {
+            setAttachment(null);
+        }
+    };
+
+    const handleFormSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!formState.consent) {
+            setResponseMessage({ type: 'error', text: 'You must consent to your data being processed.' });
+            return;
+        }
+        setLoading(true);
+        setResponseMessage(null);
+
+        const formData = new FormData();
+        formData.append('name', formState.name);
+        formData.append('email', formState.email);
+        formData.append('subject', formState.subject);
+        formData.append('message', formState.message);
+        if (attachment) {
+            formData.append('attachment', attachment);
+        }
+
+        try {
+            // This is a placeholder for your backend API endpoint.
+            // Replace '/api/contact-submit' with your actual API route.
+            const response = await fetch('/api/contact-submit', {
+                method: 'POST',
+                body: formData,
+            });
+
+            // This is a mocked successful response, as I cannot build the backend.
+            // In a real scenario, you'd parse the actual response.
+            if (response.ok || response.status === 200) { // Simulate success for demo
+                 setResponseMessage({ type: 'success', text: 'Thank you! Your message has been sent.' });
+                 (e.target as HTMLFormElement).reset();
+                 setFormState({ name: '', email: '', subject: '', message: '', consent: false });
+                 setAttachment(null);
+            } else {
+                const result = await response.json();
+                throw new Error(result.error || 'Failed to send message.');
+            }
+        } catch (error: any) {
+            setResponseMessage({ type: 'error', text: 'An error occurred. Please try again later.' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
 
     return (
         <div className="w-full flex flex-col items-center animate-fade-in text-center">
@@ -48,6 +112,8 @@ export const ContactPage: React.FC = () => {
                         <input
                           type="text"
                           name="name"
+                          value={formState.name}
+                          onChange={handleInputChange}
                           placeholder="Your Name"
                           required
                           className="w-full p-3 bg-white/5 border border-slate-300/20 rounded-lg focus:ring-2 focus:ring-cyan-400 transition-all duration-300 placeholder-slate-400/70 text-text-primary"
@@ -55,22 +121,70 @@ export const ContactPage: React.FC = () => {
                          <input
                           type="email"
                           name="email"
+                          value={formState.email}
+                          onChange={handleInputChange}
                           placeholder="Your Email"
+                          required
+                          className="w-full p-3 bg-white/5 border border-slate-300/20 rounded-lg focus:ring-2 focus:ring-cyan-400 transition-all duration-300 placeholder-slate-400/70 text-text-primary"
+                        />
+                        <input
+                          type="text"
+                          name="subject"
+                          value={formState.subject}
+                          onChange={handleInputChange}
+                          placeholder="Subject"
                           required
                           className="w-full p-3 bg-white/5 border border-slate-300/20 rounded-lg focus:ring-2 focus:ring-cyan-400 transition-all duration-300 placeholder-slate-400/70 text-text-primary"
                         />
                         <textarea
                           name="message"
+                          value={formState.message}
+                          onChange={handleInputChange}
                           placeholder="Your Message..."
                           rows={5}
                           required
                           className="w-full p-3 bg-white/5 border border-slate-300/20 rounded-lg focus:ring-2 focus:ring-cyan-400 transition-all duration-300 placeholder-slate-400/70 text-text-primary"
                         />
+                        <div>
+                          <label htmlFor="attachment" className="block text-sm font-medium text-text-secondary mb-2">Optional Attachment</label>
+                          <input
+                              type="file"
+                              id="attachment"
+                              name="attachment"
+                              onChange={handleFileChange}
+                              className="w-full text-sm text-text-secondary file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyan-500/10 file:text-cyan-300 hover:file:bg-cyan-500/20"
+                          />
+                        </div>
+                        <div className="flex items-start">
+                          <div className="flex items-center h-5">
+                            <input
+                              id="consent"
+                              name="consent"
+                              type="checkbox"
+                              checked={formState.consent}
+                              onChange={handleInputChange}
+                              className="focus:ring-cyan-500 h-4 w-4 text-cyan-600 bg-transparent border-slate-300/50 rounded"
+                            />
+                          </div>
+                          <div className="ml-3 text-sm">
+                            <label htmlFor="consent" className="text-text-secondary">
+                              I agree to the processing of my personal data as described in the <a href="#" className="font-medium text-cyan-400 hover:underline">Privacy Policy</a>.
+                            </label>
+                          </div>
+                        </div>
+
+                         {responseMessage && (
+                            <div className={`p-3 rounded-lg text-sm text-center ${responseMessage.type === 'success' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/10 text-red-400'}`}>
+                                {responseMessage.text}
+                            </div>
+                        )}
+
                         <button
                             type="submit"
-                            className="w-full mt-2 py-4 px-6 text-xl font-bold text-white bg-gradient-to-r from-amber-500 to-cyan-500 rounded-full shadow-lg hover:scale-105 transform transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-300 hover:shadow-cyan-500/50"
+                            disabled={loading || !formState.consent}
+                            className="w-full mt-2 py-4 px-6 text-xl font-bold text-white bg-gradient-to-r from-amber-500 to-cyan-500 rounded-full shadow-lg hover:scale-105 transform transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-cyan-300 hover:shadow-cyan-500/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100"
                         >
-                            Submit
+                            {loading ? 'Sending...' : 'Submit'}
                         </button>
                     </form>
                 </div>

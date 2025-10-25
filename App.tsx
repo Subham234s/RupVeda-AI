@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { Navbar } from './components/Navbar';
@@ -15,10 +14,16 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { Footer } from './components/Footer';
 import { generateAvatar } from './services/geminiService';
 import { GenerationSettings, HistoryItem, Prompt } from './types';
+import { auth, onAuthStateChanged, signOut, User, getUserData, updateUserData } from './services/firebase';
+import { AuthPage } from './components/AuthPage';
+import { AuthSplashScreen } from './components/AuthSplashScreen';
 
 type Page = 'generator' | 'prompt-library' | 'history' | 'contact';
 
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [page, setPage] = useState<Page>('generator');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -38,82 +43,85 @@ const App: React.FC = () => {
     negativePrompt: '',
   });
 
-  const isMounted = useRef(false);
-
-  // Load all data from localStorage on initial mount
+  // Handle auth state
   useEffect(() => {
-    try {
-      const savedTheme = localStorage.getItem('theme');
-      if (savedTheme) setTheme(savedTheme);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+  
+  // Load data from Firestore and localStorage on user change
+  useEffect(() => {
+    if (user) {
+      const loadData = async () => {
+        setIsDataLoaded(false); // Start loading
+        try {
+          // Fetch from Firestore
+          const userData = await getUserData(user.uid);
+          setHistory(userData.history || []);
+          setCommunityPrompts(userData.communityPrompts || []);
+          
+          // Fetch from LocalStorage
+          const savedSettings = localStorage.getItem(`generationSettings_${user.uid}`);
+          if (savedSettings) setSettings(JSON.parse(savedSettings));
+          
+          const savedPrompt = localStorage.getItem(`generatorPrompt_${user.uid}`);
+          if (savedPrompt) setPrompt(savedPrompt);
 
-      const savedSettings = localStorage.getItem('generationSettings');
-      if (savedSettings) setSettings(JSON.parse(savedSettings));
-      
-      const savedHistory = localStorage.getItem('generationHistory');
-      if(savedHistory) setHistory(JSON.parse(savedHistory));
-
-      const savedCommunityPrompts = localStorage.getItem('communityPrompts');
-      if (savedCommunityPrompts) setCommunityPrompts(JSON.parse(savedCommunityPrompts));
-
-      const savedPrompt = localStorage.getItem('generatorPrompt');
-      if (savedPrompt) setPrompt(savedPrompt);
-
-      const savedImage = localStorage.getItem('generatorImage');
-      if (savedImage) setUploadedImage(savedImage);
-      
-      const hasOnboarded = localStorage.getItem('hasOnboarded');
-      if (!hasOnboarded) {
-        setIsOnboardingOpen(true);
-      }
-
-    } catch (e) {
-      console.error("Failed to load data from localStorage", e);
+          const savedImage = localStorage.getItem(`generatorImage_${user.uid}`);
+          if (savedImage) setUploadedImage(savedImage);
+          
+          const hasOnboarded = localStorage.getItem(`hasOnboarded_${user.uid}`);
+          if (!hasOnboarded) {
+            setIsOnboardingOpen(true);
+          }
+        } catch (e) {
+          console.error("Failed to load user data:", e);
+        } finally {
+          setIsDataLoaded(true); // Finish loading
+        }
+      };
+      loadData();
+    } else {
+      // Clear data on logout
+      setHistory([]);
+      setCommunityPrompts([]);
+      setPrompt('');
+      setUploadedImage(null);
+      setSettings({ aspectRatio: '1:1', styleIntensity: 50, negativePrompt: '' });
+      setIsDataLoaded(false);
     }
-  }, []);
-
-  // Set isMounted to true after the initial render.
-  // This prevents useEffects from writing initial state back to localStorage.
-  useEffect(() => {
-    isMounted.current = true;
-  }, []);
+  }, [user]);
 
   // --- State Persistence ---
   useEffect(() => {
-    if (!isMounted.current) return;
     const root = window.document.documentElement;
     root.classList.remove(theme === 'dark' ? 'light' : 'dark');
     root.classList.add(theme);
     localStorage.setItem('theme', theme);
   }, [theme]);
   
+  // Consolidate all user-specific data persistence
   useEffect(() => {
-    if (!isMounted.current) return;
-    localStorage.setItem('generatorPrompt', prompt);
-  }, [prompt]);
-  
-  useEffect(() => {
-    if (!isMounted.current) return;
+    // Wait until the initial data load from Firestore is complete before saving anything.
+    // This prevents overwriting cloud data with the initial empty state.
+    if (!user || !isDataLoaded) return;
+
+    // Save to Firestore
+    updateUserData(user.uid, { history, communityPrompts });
+
+    // Save other session-specific data to localStorage
+    localStorage.setItem(`generatorPrompt_${user.uid}`, prompt);
     if (uploadedImage) {
-      localStorage.setItem('generatorImage', uploadedImage);
+      localStorage.setItem(`generatorImage_${user.uid}`, uploadedImage);
     } else {
-      localStorage.removeItem('generatorImage');
+      localStorage.removeItem(`generatorImage_${user.uid}`);
     }
-  }, [uploadedImage]);
+    localStorage.setItem(`generationSettings_${user.uid}`, JSON.stringify(settings));
 
-  useEffect(() => {
-    if (!isMounted.current) return;
-    localStorage.setItem('generationSettings', JSON.stringify(settings));
-  }, [settings]);
-
-  useEffect(() => {
-    if (!isMounted.current) return;
-    localStorage.setItem('generationHistory', JSON.stringify(history));
-  }, [history]);
-
-  useEffect(() => {
-    if (!isMounted.current) return;
-    localStorage.setItem('communityPrompts', JSON.stringify(communityPrompts));
-  }, [communityPrompts]);
+  }, [prompt, uploadedImage, settings, history, communityPrompts, user, isDataLoaded]);
 
 
   const handleSettingsChange = (newSettings: Partial<GenerationSettings>) => {
@@ -122,6 +130,10 @@ const App: React.FC = () => {
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
+  };
+  
+  const handleLogout = async () => {
+    await signOut(auth);
   };
 
   const handleImageUpload = (imageBase64: string) => {
@@ -191,14 +203,15 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [uploadedImage, prompt, settings]);
+  }, [uploadedImage, prompt, settings, user]);
 
   const handleFeedbackSubmit = (rating: number, comment: string) => {
-    if (!generatedAvatar) return;
+    if (!generatedAvatar || !user) return;
 
     try {
       const newFeedback = {
         id: Date.now(),
+        userId: user.uid,
         avatarImage: generatedAvatar.substring(0, 100) + '...',
         rating,
         comment,
@@ -261,7 +274,6 @@ const App: React.FC = () => {
     if (fileInput) {
         fileInput.value = "";
     }
-    // localStorage will be cleared by the useEffect hooks
   };
 
   const handleDeleteHistoryItem = (id: number) => {
@@ -279,23 +291,32 @@ const App: React.FC = () => {
   }, [handleSaveUrlAsFile]);
 
   const handleOnboardingComplete = () => {
-    setIsOnboardingOpen(false);
-    localStorage.setItem('hasOnboarded', 'true');
+    if (user) {
+      setIsOnboardingOpen(false);
+      localStorage.setItem(`hasOnboarded_${user.uid}`, 'true');
+    }
   };
 
+  if (authLoading) {
+    return <AuthSplashScreen />;
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
 
   return (
     <>
       <div className="min-h-screen w-full bg-background text-text-primary p-4 sm:p-6 lg:p-8 transition-colors duration-300 flex flex-col items-center">
         <div className="container mx-auto max-w-3xl flex flex-col items-center w-full">
-          <Header theme={theme} toggleTheme={toggleTheme} />
+          <Header theme={theme} toggleTheme={toggleTheme} user={user} onLogout={handleLogout} />
           <Navbar activePage={page} onNavigate={setPage} />
 
           {page === 'generator' && (
             <main className="w-full mt-8 flex flex-col items-center gap-8 animate-fade-in">
               <div className="w-full p-6 glassmorphic rounded-2xl text-center">
                 <h2 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-cyan-400 mb-2">
-                  Welcome to RupVeda AI
+                  Welcome, {user.displayName || user.email}!
                 </h2>
                 <p className="text-text-secondary max-w-xl mx-auto">
                   Create stunning, Indian-inspired avatars in three simple steps. 
